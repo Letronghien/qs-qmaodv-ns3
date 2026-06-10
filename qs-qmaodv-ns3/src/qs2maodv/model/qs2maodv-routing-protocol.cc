@@ -88,7 +88,7 @@ NS_OBJECT_ENSURE_REGISTERED(DeferredRouteOutputTag);
 // ============================================================
 RoutingProtocol::RoutingProtocol()
     : m_rreqRetries(2),
-      m_ttlStart(1),
+      m_ttlStart(2),
       m_ttlIncrement(2),
       m_ttlThreshold(7),
       m_timeoutBuffer(2),
@@ -109,7 +109,7 @@ RoutingProtocol::RoutingProtocol()
       m_maxQueueTime(Seconds(30)),
       m_destinationOnly(false),
       m_gratuitousReply(true),
-      m_enableHello(false),
+      m_enableHello(true),
       m_enableBroadcast(true),
       m_routingTable(m_deletePeriod),
       m_queue(m_maxQueueLen, m_maxQueueTime),
@@ -695,25 +695,21 @@ void RoutingProtocol::NotifyInterfaceUp(uint32_t i)
     if (iface.GetLocal() == Ipv4Address("127.0.0.1"))
         return;
 
-    // Unicast socket
+    // [FIX v13] Single socket per interface bound to 0.0.0.0:port.
+    // Previously two sockets (unicast + broadcast) caused a conflict:
+    // the 0.0.0.0 socket captured all inbound packets and the unicast
+    // socket never fired its RecvCallback → RecvQs2maodv never called
+    // → no RREQ/RREP processed → PDR = 0%.
+    // One socket per interface matches upstream AODV/QMAODV design.
     Ptr<Socket> socket = Socket::CreateSocket(GetObject<Node>(), UdpSocketFactory::GetTypeId());
-    NS_ASSERT(socket);
-    socket->SetRecvCallback(MakeCallback(&RoutingProtocol::RecvQs2maodv, this));
-    socket->BindToNetDevice(l3->GetNetDevice(i));
-    socket->Bind(InetSocketAddress(iface.GetLocal(), QS2MAODV_PORT));
-    socket->SetAllowBroadcast(true);
-    socket->SetIpRecvTtl(true);
-    m_socketAddresses.insert(std::make_pair(socket, iface));
-
-    // Broadcast socket
-    socket = Socket::CreateSocket(GetObject<Node>(), UdpSocketFactory::GetTypeId());
     NS_ASSERT(socket);
     socket->SetRecvCallback(MakeCallback(&RoutingProtocol::RecvQs2maodv, this));
     socket->BindToNetDevice(l3->GetNetDevice(i));
     socket->Bind(InetSocketAddress(Ipv4Address::GetAny(), QS2MAODV_PORT));
     socket->SetAllowBroadcast(true);
     socket->SetIpRecvTtl(true);
-    m_socketSubnetBroadcastAddresses.insert(std::make_pair(socket, iface));
+    m_socketAddresses.insert(std::make_pair(socket, iface));
+    // m_socketSubnetBroadcastAddresses intentionally left empty.
 
     Ptr<NetDevice> dev = m_ipv4->GetNetDevice(m_ipv4->GetInterfaceForAddress(iface.GetLocal()));
     RoutingTableEntry rt(dev, iface.GetBroadcast(), true, 0, iface, 1, iface.GetBroadcast(),
@@ -788,21 +784,15 @@ void RoutingProtocol::NotifyAddAddress(uint32_t i, Ipv4InterfaceAddress address)
         if (!socket)
         {
             if (iface.GetLocal() == Ipv4Address("127.0.0.1")) return;
+            // [FIX v13] Single socket per interface (see NotifyInterfaceUp)
             Ptr<Socket> socket = Socket::CreateSocket(GetObject<Node>(), UdpSocketFactory::GetTypeId());
-            NS_ASSERT(socket);
-            socket->SetRecvCallback(MakeCallback(&RoutingProtocol::RecvQs2maodv, this));
-            socket->BindToNetDevice(l3->GetNetDevice(i));
-            socket->Bind(InetSocketAddress(iface.GetLocal(), QS2MAODV_PORT));
-            socket->SetAllowBroadcast(true);
-            m_socketAddresses.insert(std::make_pair(socket, iface));
-            socket = Socket::CreateSocket(GetObject<Node>(), UdpSocketFactory::GetTypeId());
             NS_ASSERT(socket);
             socket->SetRecvCallback(MakeCallback(&RoutingProtocol::RecvQs2maodv, this));
             socket->BindToNetDevice(l3->GetNetDevice(i));
             socket->Bind(InetSocketAddress(Ipv4Address::GetAny(), QS2MAODV_PORT));
             socket->SetAllowBroadcast(true);
             socket->SetIpRecvTtl(true);
-            m_socketSubnetBroadcastAddresses.insert(std::make_pair(socket, iface));
+            m_socketAddresses.insert(std::make_pair(socket, iface));
             Ptr<NetDevice> dev = m_ipv4->GetNetDevice(m_ipv4->GetInterfaceForAddress(iface.GetLocal()));
             RoutingTableEntry rt(dev, iface.GetBroadcast(), true, 0, iface, 1, iface.GetBroadcast(),
                                  Simulator::GetMaximumSimulationTime());
@@ -824,8 +814,7 @@ void RoutingProtocol::NotifyRemoveAddress(uint32_t i, Ipv4InterfaceAddress addre
         m_routingTable.DeleteAllRoutesFromInterface(address);
         socket->Close();
         m_socketAddresses.erase(socket);
-        Ptr<Socket> unicastSocket = FindSubnetBroadcastSocketWithInterfaceAddress(address);
-        if (unicastSocket) { unicastSocket->Close(); m_socketAddresses.erase(unicastSocket); }
+        // [FIX v13] No subnet broadcast socket to clean up (single-socket design)
         Ptr<Ipv4L3Protocol> l3 = m_ipv4->GetObject<Ipv4L3Protocol>();
         if (l3->GetNAddresses(i))
         {
@@ -838,14 +827,7 @@ void RoutingProtocol::NotifyRemoveAddress(uint32_t i, Ipv4InterfaceAddress addre
             socket->SetAllowBroadcast(true);
             socket->SetIpRecvTtl(true);
             m_socketAddresses.insert(std::make_pair(socket, iface));
-            socket = Socket::CreateSocket(GetObject<Node>(), UdpSocketFactory::GetTypeId());
-            NS_ASSERT(socket);
-            socket->SetRecvCallback(MakeCallback(&RoutingProtocol::RecvQs2maodv, this));
-            socket->BindToNetDevice(l3->GetNetDevice(i));
-            socket->Bind(InetSocketAddress(Ipv4Address::GetAny(), QS2MAODV_PORT));
-            socket->SetAllowBroadcast(true);
-            socket->SetIpRecvTtl(true);
-            m_socketSubnetBroadcastAddresses.insert(std::make_pair(socket, iface));
+            // [FIX v13] No second socket needed (single-socket design)
             Ptr<NetDevice> dev = m_ipv4->GetNetDevice(m_ipv4->GetInterfaceForAddress(iface.GetLocal()));
             RoutingTableEntry rt(dev, iface.GetBroadcast(), true, 0, iface, 1, iface.GetBroadcast(),
                                  Simulator::GetMaximumSimulationTime());
@@ -916,7 +898,10 @@ void RoutingProtocol::RecvQs2maodv(Ptr<Socket> socket)
     else if (m_socketSubnetBroadcastAddresses.find(socket) != m_socketSubnetBroadcastAddresses.end())
         receiver = m_socketSubnetBroadcastAddresses[socket].GetLocal();
     else
-        NS_ASSERT_MSG(false, "Received a packet from an unknown socket");
+    {
+        NS_LOG_WARN("RecvQs2maodv: packet from unknown socket, dropping");
+        return;
+    }
 
     NS_LOG_DEBUG("QS2MAODV node " << this << " received packet from " << sender << " to " << receiver);
     UpdateRouteToNeighbor(sender, receiver);
