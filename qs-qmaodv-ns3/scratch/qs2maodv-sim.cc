@@ -48,7 +48,7 @@ struct SimParams
     uint32_t nFlows      = 10;
     uint32_t pktSize     = 512;    // bytes
     double   pktRate     = 4.0;    // packets/s
-    double   areaSize    = 1000.0; // meters
+    double   areaSize    = 1000.0; // meters (dùng 300.0 khi debug với nNodes<=6)
     double   maxSpeed    = 20.0;   // m/s (random waypoint)
     double   pauseTime   = 0.0;    // s
     double   initialEnergy = 50.0; // J per node
@@ -144,8 +144,10 @@ int main(int argc, char* argv[])
     channel.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
     channel.AddPropagationLoss("ns3::FriisPropagationLossModel");
     phy.SetChannel(channel.Create());
-    phy.Set("TxPowerStart", DoubleValue(7.5));
-    phy.Set("TxPowerEnd",   DoubleValue(7.5));
+    // [FIX v13] TxPower 7.5dBm (~150m range) too low for 1000x1000m area.
+    // 20dBm gives ~250-300m range with Friis model, matching standard MANET sims.
+    phy.Set("TxPowerStart", DoubleValue(20.0));
+    phy.Set("TxPowerEnd",   DoubleValue(20.0));
 
     NetDeviceContainer devices = wifi.Install(phy, mac, nodes);
 
@@ -221,7 +223,8 @@ int main(int argc, char* argv[])
         OnOffHelper onOff("ns3::UdpSocketFactory",
                            InetSocketAddress(interfaces.GetAddress(dst), port + flowsInstalled));
         onOff.SetConstantRate(DataRate(dataRate), p.pktSize);
-        double startJitter = 2.0 + rng->GetInteger(0, 50) * 0.1;
+        // [FIX v13] Fixed start after warmUp + small deterministic jitter per flow
+        double startJitter = 1.0 + flowsInstalled * 0.5;
         onOff.SetAttribute("StartTime", TimeValue(Seconds(p.warmUp + startJitter)));
         onOff.SetAttribute("StopTime",  TimeValue(Seconds(totalTime)));
         clientApps.Add(onOff.Install(nodes.Get(src)));
@@ -257,6 +260,8 @@ int main(int argc, char* argv[])
     {
         // Skip AODV/routing control flows (port 654)
         Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(kv.first);
+        // [FIX v13] Filter routing control traffic (port 655 = QS2MAODV, 654 = AODV/QMAODV)
+        if (t.destinationPort == 655 || t.sourcePort == 655) continue;
         if (t.destinationPort == 654 || t.sourcePort == 654) continue;
 
         const FlowMonitor::FlowStats& fs = kv.second;
