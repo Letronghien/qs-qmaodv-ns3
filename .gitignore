@@ -1,0 +1,25 @@
+# Build artifacts
+*.o
+*.so
+*.a
+build/
+cmake-cache/
+
+# Backup files from patch script
+*.bak_decay
+*.bak
+
+# Pending run directories (runtime only)
+runs_W2/
+runs_W3/
+runs_*/
+
+# Log files (optional — comment out to keep)
+# *.log
+# log_*.txt
+
+# macOS
+.DS_Store
+
+# Large temp files
+/tmp/
