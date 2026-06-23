@@ -29,11 +29,13 @@ bash scripts/qs2_launch_E2_C.sh       # Family E2 + C
 # 4. Run sensitivity sweeps
 bash scripts/qs2_launch_W2_W3.sh      # W2 (threshold) + W3 (decay factor)
 
-# 5. Analyse and plot
+# 5. Analyse, plot (A4 2-column format), and export Excel
 python3 scripts/qs2_analyze_all.py
+python3 scripts/qs2_plot_paper_final.py      # publication-quality figures
+python3 scripts/qs2_export_results_excel.py  # Excel workbook
 
-# 6. Build paper
-python3 paper/build_paper_v6.py
+# 6. Build paper (latest = v10)
+python3 paper/build_paper_v10.py
 ```
 
 ## Experiment Families
